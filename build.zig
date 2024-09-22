@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const sdl = b.dependency("SDL", .{
+    const sdl = b.lazyDependency("SDL", .{
         .target = target,
         .optimize = .ReleaseFast,
     });
@@ -16,7 +16,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.linkLibrary(sdl.artifact("SDL2"));
+    if (target.result.os.tag == .linux) {
+        exe.linkSystemLibrary("SDL2");
+    } else {
+        exe.linkLibrary(sdl.?.artifact("SDL2"));
+    }
 
     b.installArtifact(exe);
 
