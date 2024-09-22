@@ -24,15 +24,12 @@ pub fn main() !void {
     ) orelse return error.SdlWindowCreationFailed;
     defer c.SDL_DestroyWindow(window);
 
-    //const renderer = c.SDL_CreateRenderer(window, -1, c.SDL_RENDERER_ACCELERATED)
-    //    orelse return error.SdlRendererCreationFailed;
-
-    c.SDL_ShowWindow(window);
-
-    var event: c.SDL_Event = undefined;
-    while (true) {
+    var running = true;
+    while (running) {
+        var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
             switch (event.type) {
+                c.SDL_QUIT => running = false,
                 else => {},
             }
         }
