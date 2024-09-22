@@ -3,11 +3,28 @@ const c = @import("c.zig");
 const Sdl = @import("Sdl.zig");
 const Chip8 = @import("Chip8.zig");
 
+const usage =
+    \\usage: ./chip8 <rom>
+    \\
+;
+
+const max_rom_size = std.math.maxInt(u16);
+
 pub fn main() !void {
+    const args = try std.process.argsAlloc(std.heap.page_allocator);
+
+    const stderr = std.io.getStdErr();
+    if (args.len < 2) {
+        try stderr.writeAll(usage);
+        return error.MissingRomFile;
+    }
+
+    const rom = try readRomFile(args[1]);
+
+    var chip8 = try Chip8.init(rom);
+
     var sdl = try Sdl.init("chip-8", 800, 600);
     defer sdl.deinit();
-
-    var frame: Chip8.Frame = .init;
 
     var running = true;
     while (running) {
@@ -19,7 +36,17 @@ pub fn main() !void {
             }
         }
 
-        frame.clear();
-        try sdl.presentFrame(&frame);
+        chip8.stepFrame();
+
+        try sdl.presentFrame(&chip8.frame);
     }
+}
+
+pub fn readRomFile(path: []const u8) ![]const u8 {
+    const rom_file = try std.fs.cwd().openFile(path, .{});
+    defer rom_file.close();
+
+    const rom = try rom_file.readToEndAlloc(std.heap.page_allocator, max_rom_size);
+
+    return rom;
 }
