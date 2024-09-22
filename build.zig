@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const sdl = b.dependency("SDL", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
     const exe = b.addExecutable(.{
         .name = "chip8",
         .root_source_file = b.path("src/main.zig"),
@@ -11,8 +16,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.linkSystemLibrary("SDL2");
-    exe.linkLibC();
+    exe.linkLibrary(sdl.artifact("SDL2"));
 
     b.installArtifact(exe);
 
