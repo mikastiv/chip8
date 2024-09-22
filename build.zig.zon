@@ -5,6 +5,7 @@
         .SDL = .{
             .url = "git+https://github.com/allyourcodebase/SDL#0f23d064e1dd11947236d9cccb79039c617865da",
             .hash = "1220bdd8cfd7740aa9f8cce7679824a17b364ff5a34698aa2c1c75ea77e0df15a3b1",
+            .lazy = true,
         },
     },
     .paths = .{

@@ -1,28 +1,13 @@
 const std = @import("std");
 const c = @import("c.zig");
-
-fn printSdlError() void {
-    const msg = c.SDL_GetError();
-    std.log.err("{s}", .{msg});
-}
+const Sdl = @import("Sdl.zig");
+const Chip8 = @import("Chip8.zig");
 
 pub fn main() !void {
-    const result = c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO);
-    if (result < 0) {
-        printSdlError();
-        return error.SdlInitFailed;
-    }
-    defer c.SDL_Quit();
+    var sdl = try Sdl.init("chip-8", 800, 600);
+    defer sdl.deinit();
 
-    const window = c.SDL_CreateWindow(
-        "Chip8",
-        c.SDL_WINDOWPOS_CENTERED,
-        c.SDL_WINDOWPOS_CENTERED,
-        800,
-        600,
-        0,
-    ) orelse return error.SdlWindowCreationFailed;
-    defer c.SDL_DestroyWindow(window);
+    var frame: Chip8.Frame = .init;
 
     var running = true;
     while (running) {
@@ -33,5 +18,8 @@ pub fn main() !void {
                 else => {},
             }
         }
+
+        frame.clear();
+        try sdl.presentFrame(&frame);
     }
 }
