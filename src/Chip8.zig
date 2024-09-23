@@ -19,17 +19,36 @@ rng: std.Random.DefaultPrng,
 keyboard: [Key.count]bool,
 
 pub const Frame = struct {
-    pub const Color = enum(u8) {
-        black = 0x00,
-        white = 0xFF,
+    pub const Pixel = u32;
+    pub const Color = packed struct(Pixel) {
+        pub const off: Color = .{
+            .r = 0xCC,
+            .g = 0x55,
+            .b = 0x00,
+            .a = @intCast(c.SDL_ALPHA_OPAQUE),
+        };
+        pub const on: Color = .{
+            .r = 0xFF,
+            .g = 0xA5,
+            .b = 0x1C,
+            .a = @intCast(c.SDL_ALPHA_OPAQUE),
+        };
+
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
 
         fn fromByte(byte: u8, bit: u3) Color {
             const mask = @as(u8, 0x80) >> bit;
-            return if (byte & mask == 0) .black else .white;
+            return if (byte & mask == 0) off else on;
+        }
+
+        fn eql(a: Color, b: Color) bool {
+            return @as(Pixel, @bitCast(a)) == @as(Pixel, @bitCast(b));
         }
     };
 
-    pub const Pixel = u32;
     pub const width = screen_width;
     pub const height = screen_height;
     pub const pitch = width * @sizeOf(Pixel);
@@ -41,14 +60,16 @@ pub const Frame = struct {
 
     pub fn setByte(self: *Frame, x: usize, y: usize, byte: u8) void {
         inline for (0..8) |offset| {
-            const color = Color.fromByte(byte, @intCast(offset));
-
+            const new_color = Color.fromByte(byte, @intCast(offset));
             const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
 
-            self.pixels[index + 0] ^= @intFromEnum(color);
-            self.pixels[index + 1] ^= @intFromEnum(color);
-            self.pixels[index + 2] ^= @intFromEnum(color);
-            self.pixels[index + 3] = @intCast(c.SDL_ALPHA_OPAQUE);
+            const old_color = self.readColor(index);
+
+            if (old_color.eql(new_color)) {
+                self.writeColor(index, Color.off);
+            } else if (!new_color.eql(Color.off)) {
+                self.writeColor(index, new_color);
+            }
         }
     }
 
@@ -57,11 +78,10 @@ pub const Frame = struct {
 
         inline for (0..8) |offset| {
             const new_color = Color.fromByte(byte, @intCast(offset));
-
             const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
-            const old_color: Color = @enumFromInt(self.pixels[index]);
+            const old_color = self.readColor(index);
 
-            if (new_color == .black and old_color == .white)
+            if (new_color.eql(Color.off) and old_color.eql(Color.on))
                 result = true;
         }
 
@@ -69,7 +89,24 @@ pub const Frame = struct {
     }
 
     pub fn clear(self: *Frame) void {
-        @memset(&self.pixels, 0);
+        const pixels = std.mem.bytesAsSlice(Pixel, &self.pixels);
+        @memset(pixels, @bitCast(Color.off));
+    }
+
+    fn readColor(self: *const Frame, index: usize) Color {
+        return .{
+            .r = self.pixels[index + 0],
+            .g = self.pixels[index + 1],
+            .b = self.pixels[index + 2],
+            .a = self.pixels[index + 3],
+        };
+    }
+
+    fn writeColor(self: *Frame, index: usize, color: Color) void {
+        self.pixels[index + 0] = color.r;
+        self.pixels[index + 1] = color.g;
+        self.pixels[index + 2] = color.b;
+        self.pixels[index + 3] = color.a;
     }
 };
 
