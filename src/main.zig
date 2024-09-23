@@ -26,20 +26,7 @@ pub fn main() !void {
     var sdl = try Sdl.init("chip-8", 800, 600);
     defer sdl.deinit();
 
-    var running = true;
-    while (running) {
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event) != 0) {
-            switch (event.type) {
-                c.SDL_QUIT => running = false,
-                else => {},
-            }
-        }
-
-        chip8.stepFrame();
-
-        try sdl.presentFrame(&chip8.frame);
-    }
+    try chip8.run(&sdl);
 }
 
 pub fn readRomFile(path: []const u8) ![]const u8 {
