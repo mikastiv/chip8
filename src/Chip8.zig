@@ -59,7 +59,7 @@ pub const Frame = struct {
             const new_color = Color.fromByte(byte, @intCast(offset));
 
             const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
-            const old_color: Color = @intFromEnum(self.pixels[index]);
+            const old_color: Color = @enumFromInt(self.pixels[index]);
 
             if (new_color == .black and old_color == .white)
                 result = true;
@@ -208,7 +208,7 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
             0x3000 => if (v[x] == kk) {
                 self.regs.pc +%= 2;
             },
-            0x4000 => if (v[y] != kk) {
+            0x4000 => if (v[x] != kk) {
                 self.regs.pc +%= 2;
             },
             0x5000 => switch (opcode & 0xF) {
@@ -230,20 +230,24 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
                     v[Registers.flags] = @intFromBool(result > 0xFF);
                 },
                 0x5 => {
-                    v[Registers.flags] = @intFromBool(v[x] > v[y]);
+                    const flag = v[x] >= v[y];
                     v[x] -%= v[y];
+                    v[Registers.flags] = @intFromBool(flag);
                 },
                 0x6 => {
-                    v[Registers.flags] = @intFromBool(v[x] & 0x1 != 0);
+                    const flag = v[x] & 0x1 != 0;
                     v[x] >>= 1;
+                    v[Registers.flags] = @intFromBool(flag);
                 },
                 0x7 => {
-                    v[Registers.flags] = @intFromBool(v[y] > v[x]);
-                    v[x] = v[y] - v[x];
+                    const flag = v[y] >= v[x];
+                    v[x] = v[y] -% v[x];
+                    v[Registers.flags] = @intFromBool(flag);
                 },
                 0xE => {
-                    v[Registers.flags] = @intFromBool(v[x] & 0x8 != 0);
+                    const flag = v[x] & 0x8 != 0;
                     v[x] <<= 1;
+                    v[Registers.flags] = @intFromBool(flag);
                 },
                 else => invalidInstruction(opcode),
             },
@@ -260,11 +264,15 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
                 const address = self.regs.i;
                 const sprite = self.memory[address .. address + n];
 
-                const collision = false;
+                var collision = false;
 
                 for (sprite, 0..) |byte, sprite_y| {
                     const col = v[x] % screen_width;
                     const row = (v[y] + sprite_y) % screen_height;
+
+                    if (self.frame.hasCollision(col, row, byte))
+                        collision = true;
+
                     self.frame.setByte(col, row, byte);
                 }
 
@@ -283,7 +291,7 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
             },
             0xF000 => switch (opcode & 0xFF) {
                 0x07 => v[x] = self.regs.dt,
-                0xA0 => loop: while (true) {
+                0x0A => loop: while (true) {
                     var event: c.SDL_Event = undefined;
                     while (c.SDL_PollEvent(&event) != 0) {
                         switch (event.type) {
@@ -308,18 +316,18 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
                 0x29 => self.regs.i = character_size *% v[x],
                 0x33 => {
                     const units = v[x] % 10;
-                    const tens = v[x] / 10 % 10;
+                    const tens = (v[x] / 10) % 10;
                     const hundreds = v[x] / 100;
 
                     self.memory[self.regs.i + 0] = hundreds;
                     self.memory[self.regs.i + 1] = tens;
                     self.memory[self.regs.i + 2] = units;
                 },
-                0x55 => inline for (0..Registers.count) |index| {
+                0x55 => for (0..x + 1) |index| {
                     const address = self.regs.i + index;
                     self.memory[address] = self.regs.v[index];
                 },
-                0x65 => inline for (0..Registers.count) |index| {
+                0x65 => for (0..x + 1) |index| {
                     const address = self.regs.i + index;
                     self.regs.v[index] = self.memory[address];
                 },
