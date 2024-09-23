@@ -71,7 +71,7 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
     var audio_is_playing = false;
     var timer = try std.time.Timer.start();
     var execution_timer = try std.time.Timer.start();
-    var execute_instruction = false;
+    var execute_count: u32 = 0;
 
     loop: while (true) {
         var event: c.SDL_Event = undefined;
@@ -92,15 +92,24 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
         }
 
         var render_frame = false;
-        if (execute_instruction and !self.wait_for_key) {
-            const opcode = self.readNextOpcode();
-            render_frame = self.execute(opcode);
-            execute_instruction = false;
+        if (execute_count > 0 and !self.wait_for_key) {
+            while (execute_count > 0) {
+                const opcode = self.readNextOpcode();
+                if (self.execute(opcode) and !render_frame) {
+                    render_frame = true;
+                }
+
+                execute_count -= 1;
+
+                if (self.wait_for_key) break;
+            }
         }
 
-        if (timeElapsedSecs(timer.read()) > timer_frequency) {
-            self.regs.dt -|= 1;
-            self.regs.st -|= 1;
+        const time_elapsed_timer = timeElapsedSecs(timer.read());
+        if (time_elapsed_timer > timer_frequency) {
+            const ticks: u8 = @intFromFloat(time_elapsed_timer / timer_frequency);
+            self.regs.dt -|= ticks;
+            self.regs.st -|= ticks;
             timer.reset();
         }
 
@@ -110,14 +119,18 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
             c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_is_playing));
         }
 
-        if (timeElapsedSecs(execution_timer.read()) > execution_frequency) {
-            execute_instruction = true;
+        const time_elapsed_execution = timeElapsedSecs(execution_timer.read());
+        if (time_elapsed_execution > execution_frequency) {
+            const ticks: u32 = @intFromFloat(time_elapsed_execution / execution_frequency);
+            execute_count += ticks;
             execution_timer.reset();
         }
 
         if (render_frame) {
             try sdl.presentFrame(&self.frame);
         }
+
+        c.SDL_Delay(4);
     }
 }
 
