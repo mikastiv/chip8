@@ -13,7 +13,13 @@ fn printSdlError() void {
     std.log.err("{s}", .{c.SDL_GetError()});
 }
 
-pub fn init(window_title: [:0]const u8, window_width: u32, window_height: u32, sample_rate: u32, audio_ptr: *anyopaque) !@This() {
+pub fn init(
+    window_title: [:0]const u8,
+    window_width: u32,
+    window_height: u32,
+    sample_rate: u32,
+    note_hz: f32,
+) !@This() {
     errdefer printSdlError();
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO) < 0)
@@ -46,13 +52,15 @@ pub fn init(window_title: [:0]const u8, window_width: u32, window_height: u32, s
     ) orelse return error.SdlTextureCreationFailed;
     errdefer c.SDL_DestroyTexture(texture);
 
+    const audio_context = try std.heap.page_allocator.create(AudioContext);
+
     const wanted_audio_spec: c.SDL_AudioSpec = .{
         .freq = @intCast(sample_rate),
         .format = c.AUDIO_F32,
         .channels = 1,
         .samples = 2048,
-        .callback = Chip8.audioCallback,
-        .userdata = audio_ptr,
+        .callback = audioCallback,
+        .userdata = audio_context,
         .silence = 0,
         .size = 0,
         .padding = 0,
@@ -66,6 +74,16 @@ pub fn init(window_title: [:0]const u8, window_width: u32, window_height: u32, s
         c.SDL_AUDIO_ALLOW_FORMAT_CHANGE,
     );
     if (audio_device == 0) return error.SdlAudioDeviceCreationFailed;
+
+    {
+        c.SDL_LockAudioDevice(audio_device);
+        defer c.SDL_UnlockAudioDevice(audio_device);
+
+        audio_context.* = .{
+            .increment = note_hz / @as(f32, @floatFromInt(obtained_audio_spec.freq)),
+            .phase = 0,
+        };
+    }
 
     return .{
         .window = window,
@@ -100,6 +118,23 @@ pub fn presentFrame(self: *@This(), frame: *const Frame) !void {
         return error.SdlRenderCopyFailed;
 
     c.SDL_RenderPresent(self.renderer);
+}
+
+const AudioContext = struct {
+    const volume = 0.10;
+
+    increment: f32,
+    phase: f32,
+};
+
+fn audioCallback(ctx: ?*anyopaque, raw_stream: [*c]c.Uint8, size: c_int) callconv(.C) void {
+    const audio: *AudioContext = @ptrCast(@alignCast(ctx));
+
+    const stream = std.mem.bytesAsSlice(f32, raw_stream[0..@intCast(size)]);
+    for (stream) |*sample| {
+        sample.* = if (audio.phase > 0.5) AudioContext.volume else -AudioContext.volume;
+        audio.phase = @mod(audio.phase + audio.increment, 1.0);
+    }
 }
 
 pub fn deinit(self: *@This()) void {

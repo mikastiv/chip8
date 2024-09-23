@@ -18,7 +18,6 @@ memory: Memory,
 frame: Frame,
 rng: std.Random.DefaultPrng,
 keyboard: Keyboard,
-audio_context: AudioContext,
 wait_for_key: bool,
 
 const Stack = [stack_size]u16;
@@ -58,10 +57,6 @@ pub fn init(rom: []const u8) !@This() {
         .frame = .init,
         .rng = std.Random.DefaultPrng.init(0),
         .keyboard = std.mem.zeroes(Keyboard),
-        .audio_context = .{
-            .increment = 0,
-            .phase = 0,
-        },
         .wait_for_key = false,
     };
 
@@ -72,11 +67,8 @@ pub fn init(rom: []const u8) !@This() {
     return self;
 }
 
-pub fn run(self: *@This(), sdl: *Sdl, audio_tone_hz: f32) !void {
-    self.audio_context.increment = audio_tone_hz / @as(f32, @floatFromInt(sdl.audio_format.freq));
-
+pub fn run(self: *@This(), sdl: *Sdl) !void {
     var audio_is_playing = false;
-
     var timer = try std.time.Timer.start();
     var execution_timer = try std.time.Timer.start();
     var execute_instruction = false;
@@ -126,23 +118,6 @@ pub fn run(self: *@This(), sdl: *Sdl, audio_tone_hz: f32) !void {
         if (render_frame) {
             try sdl.presentFrame(&self.frame);
         }
-    }
-}
-
-const AudioContext = struct {
-    const volume = 0.10;
-
-    increment: f32,
-    phase: f32,
-};
-
-pub fn audioCallback(ctx: ?*anyopaque, raw_stream: [*c]c.Uint8, size: c_int) callconv(.C) void {
-    const audio: *AudioContext = @ptrCast(@alignCast(ctx));
-
-    const stream = std.mem.bytesAsSlice(f32, raw_stream[0..@intCast(size)]);
-    for (stream) |*sample| {
-        sample.* = if (audio.phase > 0.5) AudioContext.volume else -AudioContext.volume;
-        audio.phase = @mod(audio.phase + audio.increment, 1.0);
     }
 }
 

@@ -12,8 +12,8 @@ const max_rom_size = std.math.maxInt(u16);
 
 pub const window_width = 800;
 pub const window_height = 600;
+pub const sample_rate = 48000;
 pub const note_hz = 256.0;
-pub const sample_rate = 48000.0;
 
 pub fn main() !void {
     const args = try std.process.argsAlloc(std.heap.page_allocator);
@@ -33,14 +33,14 @@ pub fn main() !void {
         window_width,
         window_height,
         sample_rate,
-        @ptrCast(&chip8.audio_context),
+        note_hz,
     );
     defer sdl.deinit();
 
-    try chip8.run(&sdl, note_hz);
+    try chip8.run(&sdl);
 }
 
-pub fn readRomFile(path: []const u8) ![]const u8 {
+fn readRomFile(path: []const u8) ![]const u8 {
     const rom_file = try std.fs.cwd().openFile(path, .{});
     defer rom_file.close();
 
