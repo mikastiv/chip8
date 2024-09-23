@@ -5,18 +5,19 @@ const Sdl = @import("Sdl.zig");
 pub const screen_width = 64;
 pub const screen_height = 32;
 
-const execution_frequency = 1.0 / 500.0;
+const execution_frequency = 1.0 / 600.0;
+const timer_frequency = 1.0 / 60.0;
 const memory_size = 4096;
 const stack_size = 16;
-
-const program_start_address = 0x200;
+const program_start_address = 512;
 
 regs: Registers,
 stack: Stack,
 memory: Memory,
 frame: Frame,
 rng: std.Random.DefaultPrng,
-keyboard: [Key.count]bool,
+keyboard: Keyboard,
+wait_for_key: bool,
 
 pub const Frame = struct {
     pub const Pixel = u32;
@@ -113,6 +114,7 @@ pub const Frame = struct {
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
 const Opcode = u16;
+const Keyboard = [Key.count]bool;
 
 const Registers = struct {
     const count = 16;
@@ -131,7 +133,7 @@ const Registers = struct {
         .dt = 0,
         .st = 0,
         .sp = 0,
-        .pc = 0x200,
+        .pc = program_start_address,
     };
 };
 
@@ -188,7 +190,8 @@ pub fn init(rom: []const u8) !@This() {
         .memory = std.mem.zeroes(Memory),
         .frame = .init,
         .rng = std.Random.DefaultPrng.init(0),
-        .keyboard = std.mem.zeroes([Key.count]bool),
+        .keyboard = std.mem.zeroes(Keyboard),
+        .wait_for_key = false,
     };
 
     @memcpy(self.memory[0..default_character_set.len], &default_character_set);
@@ -198,25 +201,45 @@ pub fn init(rom: []const u8) !@This() {
 }
 
 pub fn run(self: *@This(), sdl: *Sdl) !void {
-    var running = true;
-    while (running) {
+    var timer = try std.time.Timer.start();
+    var execution_timer = try std.time.Timer.start();
+    var execute_instruction = false;
+
+    loop: while (true) {
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
             switch (event.type) {
-                c.SDL_QUIT => running = false,
+                c.SDL_QUIT => break :loop,
                 c.SDL_KEYDOWN, c.SDL_KEYUP => {
                     const maybe_key = Key.fromSdlKey(event.key.keysym.sym);
                     if (maybe_key) |key| {
-                        self.keyboard[@intFromEnum(key)] = event.key.type == c.SDL_KEYDOWN;
+                        const is_key_down = event.key.type == c.SDL_KEYDOWN;
+                        self.keyboard[@intFromEnum(key)] = is_key_down;
+
+                        if (is_key_down) self.wait_for_key = false;
                     }
                 },
                 else => {},
             }
         }
 
-        const opcode = self.readNextOpcode();
         var render_frame = false;
-        self.execute(opcode, &running, &render_frame);
+        if (execute_instruction and !self.wait_for_key) {
+            const opcode = self.readNextOpcode();
+            render_frame = self.execute(opcode);
+            execute_instruction = false;
+        }
+
+        if (timeElapsedSecs(timer.read()) > timer_frequency) {
+            self.regs.dt -|= 1;
+            self.regs.st -|= 1;
+            timer.reset();
+        }
+
+        if (timeElapsedSecs(execution_timer.read()) > execution_frequency) {
+            execute_instruction = true;
+            execution_timer.reset();
+        }
 
         if (render_frame) {
             try sdl.presentFrame(&self.frame);
@@ -224,7 +247,14 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
     }
 }
 
-fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
+fn timeElapsedSecs(time_elapsed_ns: u64) f64 {
+    const time_elapsed_ns_f64: f64 = @floatFromInt(time_elapsed_ns);
+    return time_elapsed_ns_f64 / std.time.ns_per_s;
+}
+
+fn execute(self: *@This(), opcode: Opcode) bool {
+    var result = false;
+
     const v = &self.regs.v;
 
     const nnn = opcode & 0xFFF;
@@ -232,6 +262,7 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
     const x = (opcode >> 8) & 0xF;
     const y = (opcode >> 4) & 0xF;
     const kk: u8 = @intCast(opcode & 0xFF);
+
     switch (opcode) {
         0x00E0 => self.frame.clear(),
         0x00EE => self.regs.pc = self.pop(),
@@ -262,9 +293,9 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
                 0x2 => v[x] &= v[y],
                 0x3 => v[x] ^= v[y],
                 0x4 => {
-                    const result = @as(u16, v[x]) + @as(u16, v[y]);
-                    v[x] = @truncate(result);
-                    v[Registers.flags] = @intFromBool(result > 0xFF);
+                    const sum = @as(u16, v[x]) + @as(u16, v[y]);
+                    v[x] = @truncate(sum);
+                    v[Registers.flags] = @intFromBool(sum > 0xFF);
                 },
                 0x5 => {
                     const flag = v[x] >= v[y];
@@ -315,7 +346,7 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
 
                 self.regs.v[Registers.flags] = @intFromBool(collision);
 
-                render.* = true;
+                result = true;
             },
             0xE000 => switch (opcode & 0xFF) {
                 0x9E => if (self.keyboard[v[x]]) {
@@ -328,25 +359,7 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
             },
             0xF000 => switch (opcode & 0xFF) {
                 0x07 => v[x] = self.regs.dt,
-                0x0A => loop: while (true) {
-                    var event: c.SDL_Event = undefined;
-                    while (c.SDL_PollEvent(&event) != 0) {
-                        switch (event.type) {
-                            c.SDL_QUIT => {
-                                running.* = false;
-                                break :loop;
-                            },
-                            c.SDL_KEYDOWN, c.SDL_KEYUP => {
-                                const maybe_key = Key.fromSdlKey(event.key.keysym.sym);
-                                if (maybe_key) |key| {
-                                    self.keyboard[@intFromEnum(key)] = event.key.type == c.SDL_KEYDOWN;
-                                    break :loop;
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                },
+                0x0A => self.wait_for_key = true,
                 0x15 => self.regs.dt = v[x],
                 0x18 => self.regs.st = v[x],
                 0x1E => self.regs.i +%= v[x],
@@ -373,6 +386,8 @@ fn execute(self: *@This(), opcode: Opcode, running: *bool, render: *bool) void {
             else => invalidInstruction(opcode),
         },
     }
+
+    return result;
 }
 
 fn push(self: *@This(), value: u16) void {
