@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c.zig");
 const Sdl = @import("Sdl.zig");
+const Frame = @import("Frame.zig");
 
 pub const screen_width = 64;
 pub const screen_height = 32;
@@ -17,99 +18,8 @@ memory: Memory,
 frame: Frame,
 rng: std.Random.DefaultPrng,
 keyboard: Keyboard,
+audio_context: AudioContext,
 wait_for_key: bool,
-
-pub const Frame = struct {
-    pub const Pixel = u32;
-    pub const Color = packed struct(Pixel) {
-        pub const off: Color = .{
-            .r = 0xCC,
-            .g = 0x55,
-            .b = 0x00,
-            .a = @intCast(c.SDL_ALPHA_OPAQUE),
-        };
-        pub const on: Color = .{
-            .r = 0xFF,
-            .g = 0xA5,
-            .b = 0x1C,
-            .a = @intCast(c.SDL_ALPHA_OPAQUE),
-        };
-
-        r: u8,
-        g: u8,
-        b: u8,
-        a: u8,
-
-        fn fromByte(byte: u8, bit: u3) Color {
-            const mask = @as(u8, 0x80) >> bit;
-            return if (byte & mask == 0) off else on;
-        }
-
-        fn eql(a: Color, b: Color) bool {
-            return @as(Pixel, @bitCast(a)) == @as(Pixel, @bitCast(b));
-        }
-    };
-
-    pub const width = screen_width;
-    pub const height = screen_height;
-    pub const pitch = width * @sizeOf(Pixel);
-    pub const size = width * height * @sizeOf(Pixel);
-
-    pixels: [size]u8,
-
-    pub const init: Frame = .{ .pixels = std.mem.zeroes([size]u8) };
-
-    pub fn setByte(self: *Frame, x: usize, y: usize, byte: u8) void {
-        inline for (0..8) |offset| {
-            const new_color = Color.fromByte(byte, @intCast(offset));
-            const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
-
-            const old_color = self.readColor(index);
-
-            if (old_color.eql(new_color)) {
-                self.writeColor(index, Color.off);
-            } else if (!new_color.eql(Color.off)) {
-                self.writeColor(index, new_color);
-            }
-        }
-    }
-
-    pub fn hasCollision(self: *const Frame, x: usize, y: usize, byte: u8) bool {
-        var result = false;
-
-        inline for (0..8) |offset| {
-            const new_color = Color.fromByte(byte, @intCast(offset));
-            const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
-            const old_color = self.readColor(index);
-
-            if (new_color.eql(Color.off) and old_color.eql(Color.on))
-                result = true;
-        }
-
-        return result;
-    }
-
-    pub fn clear(self: *Frame) void {
-        const pixels = std.mem.bytesAsSlice(Pixel, &self.pixels);
-        @memset(pixels, @bitCast(Color.off));
-    }
-
-    fn readColor(self: *const Frame, index: usize) Color {
-        return .{
-            .r = self.pixels[index + 0],
-            .g = self.pixels[index + 1],
-            .b = self.pixels[index + 2],
-            .a = self.pixels[index + 3],
-        };
-    }
-
-    fn writeColor(self: *Frame, index: usize, color: Color) void {
-        self.pixels[index + 0] = color.r;
-        self.pixels[index + 1] = color.g;
-        self.pixels[index + 2] = color.b;
-        self.pixels[index + 3] = color.a;
-    }
-};
 
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
@@ -137,49 +47,6 @@ const Registers = struct {
     };
 };
 
-const Key = enum {
-    const count = std.enums.values(Key).len;
-
-    @"0",
-    @"1",
-    @"2",
-    @"3",
-    @"4",
-    @"5",
-    @"6",
-    @"7",
-    @"8",
-    @"9",
-    a,
-    b,
-    c,
-    d,
-    e,
-    f,
-
-    fn fromSdlKey(key: i32) ?Key {
-        return switch (key) {
-            c.SDLK_0 => .@"0",
-            c.SDLK_1 => .@"1",
-            c.SDLK_2 => .@"2",
-            c.SDLK_3 => .@"3",
-            c.SDLK_4 => .@"4",
-            c.SDLK_5 => .@"5",
-            c.SDLK_6 => .@"6",
-            c.SDLK_7 => .@"7",
-            c.SDLK_8 => .@"8",
-            c.SDLK_9 => .@"9",
-            c.SDLK_a => .a,
-            c.SDLK_b => .b,
-            c.SDLK_c => .c,
-            c.SDLK_d => .d,
-            c.SDLK_e => .e,
-            c.SDLK_f => .f,
-            else => return null,
-        };
-    }
-};
-
 pub fn init(rom: []const u8) !@This() {
     if (rom.len > memory_size - program_start_address)
         return error.ProgramTooLarge;
@@ -191,16 +58,25 @@ pub fn init(rom: []const u8) !@This() {
         .frame = .init,
         .rng = std.Random.DefaultPrng.init(0),
         .keyboard = std.mem.zeroes(Keyboard),
+        .audio_context = .{
+            .increment = 0,
+            .phase = 0,
+        },
         .wait_for_key = false,
     };
 
+    self.frame.clear();
     @memcpy(self.memory[0..default_character_set.len], &default_character_set);
     @memcpy(self.memory[program_start_address .. program_start_address + rom.len], rom);
 
     return self;
 }
 
-pub fn run(self: *@This(), sdl: *Sdl) !void {
+pub fn run(self: *@This(), sdl: *Sdl, audio_tone_hz: f32) !void {
+    self.audio_context.increment = audio_tone_hz / @as(f32, @floatFromInt(sdl.audio_format.freq));
+
+    var audio_is_playing = false;
+
     var timer = try std.time.Timer.start();
     var execution_timer = try std.time.Timer.start();
     var execute_instruction = false;
@@ -236,6 +112,12 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
             timer.reset();
         }
 
+        const audio_was_playing = audio_is_playing;
+        audio_is_playing = self.regs.st > 0;
+        if (audio_is_playing != audio_was_playing) {
+            c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_is_playing));
+        }
+
         if (timeElapsedSecs(execution_timer.read()) > execution_frequency) {
             execute_instruction = true;
             execution_timer.reset();
@@ -244,6 +126,23 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
         if (render_frame) {
             try sdl.presentFrame(&self.frame);
         }
+    }
+}
+
+const AudioContext = struct {
+    const volume = 0.10;
+
+    increment: f32,
+    phase: f32,
+};
+
+pub fn audioCallback(ctx: ?*anyopaque, raw_stream: [*c]c.Uint8, size: c_int) callconv(.C) void {
+    const audio: *AudioContext = @ptrCast(@alignCast(ctx));
+
+    const stream = std.mem.bytesAsSlice(f32, raw_stream[0..@intCast(size)]);
+    for (stream) |*sample| {
+        sample.* = if (audio.phase > 0.5) AudioContext.volume else -AudioContext.volume;
+        audio.phase = @mod(audio.phase + audio.increment, 1.0);
     }
 }
 
@@ -431,4 +330,47 @@ const default_character_set = [_]u8{
     0xE0, 0x90, 0x90, 0x90, 0xE0, // D
     0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+};
+
+const Key = enum {
+    const count = std.enums.values(Key).len;
+
+    @"0",
+    @"1",
+    @"2",
+    @"3",
+    @"4",
+    @"5",
+    @"6",
+    @"7",
+    @"8",
+    @"9",
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+
+    fn fromSdlKey(key: i32) ?Key {
+        return switch (key) {
+            c.SDLK_0 => .@"0",
+            c.SDLK_1 => .@"1",
+            c.SDLK_2 => .@"2",
+            c.SDLK_3 => .@"3",
+            c.SDLK_4 => .@"4",
+            c.SDLK_5 => .@"5",
+            c.SDLK_6 => .@"6",
+            c.SDLK_7 => .@"7",
+            c.SDLK_8 => .@"8",
+            c.SDLK_9 => .@"9",
+            c.SDLK_a => .a,
+            c.SDLK_b => .b,
+            c.SDLK_c => .c,
+            c.SDLK_d => .d,
+            c.SDLK_e => .e,
+            c.SDLK_f => .f,
+            else => return null,
+        };
+    }
 };
