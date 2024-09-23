@@ -225,7 +225,7 @@ fn execute(self: *@This(), opcode: Opcode) bool {
                 else => invalidInstruction(opcode),
             },
             0xA000 => self.regs.i = nnn,
-            0xB000 => self.regs.pc = nnn +% v[0],
+            0xB000 => self.regs.pc = nnn +% v[x],
             0xC000 => v[x] = self.rng.random().int(u8) & kk,
             0xD000 => {
                 const address = self.regs.i;
@@ -234,13 +234,18 @@ fn execute(self: *@This(), opcode: Opcode) bool {
                 var collision = false;
 
                 for (sprite, 0..) |byte, sprite_y| {
-                    const col = v[x] % screen_width;
-                    const row = (v[y] + sprite_y) % screen_height;
+                    for (0..8) |sprite_x| {
+                        const mask: u8 = @as(u8, 0x80) >> @intCast(sprite_x);
+                        if (byte & mask == 0) continue;
 
-                    if (self.frame.hasCollision(col, row, byte))
-                        collision = true;
+                        const pixel_x = (v[x] + sprite_x) % screen_width;
+                        const pixel_y = (v[y] + sprite_y) % screen_height;
 
-                    self.frame.setByte(col, row, byte);
+                        if (self.frame.hasCollision(pixel_x, pixel_y))
+                            collision = true;
+
+                        self.frame.putPixel(pixel_x, pixel_y);
+                    }
                 }
 
                 self.regs.v[Registers.flags] = @intFromBool(collision);

@@ -22,11 +22,6 @@ const Color = packed struct(Pixel) {
     b: u8,
     a: u8,
 
-    fn fromByte(byte: u8, bit: u3) Color {
-        const mask = @as(u8, 0x80) >> bit;
-        return if (byte & mask == 0) off else on;
-    }
-
     fn eql(a: Color, b: Color) bool {
         return @as(Pixel, @bitCast(a)) == @as(Pixel, @bitCast(b));
     }
@@ -41,34 +36,26 @@ pixels: [size]u8,
 
 pub const init: @This() = .{ .pixels = std.mem.zeroes([size]u8) };
 
-pub fn setByte(self: *@This(), x: usize, y: usize, byte: u8) void {
-    inline for (0..8) |offset| {
-        const new_color = Color.fromByte(byte, @intCast(offset));
-        const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
+pub fn putPixel(self: *@This(), x: usize, y: usize) void {
+    const index = (y * pitch) + (x * @sizeOf(Pixel));
 
-        const old_color = self.readColor(index);
+    const old_color = self.readColor(index);
 
-        if (old_color.eql(new_color)) {
-            self.writeColor(index, Color.off);
-        } else if (!new_color.eql(Color.off)) {
-            self.writeColor(index, new_color);
-        }
+    if (old_color.eql(Color.on)) {
+        self.writeColor(index, Color.off);
+    } else {
+        self.writeColor(index, Color.on);
     }
 }
 
-pub fn hasCollision(self: *const @This(), x: usize, y: usize, byte: u8) bool {
-    var result = false;
+pub fn hasCollision(self: *const @This(), x: usize, y: usize) bool {
+    const index = (y * pitch) + (x * @sizeOf(Pixel));
+    const old_color = self.readColor(index);
 
-    inline for (0..8) |offset| {
-        const new_color = Color.fromByte(byte, @intCast(offset));
-        const index = (y * pitch) + (x * @sizeOf(Pixel)) + (offset * @sizeOf(Pixel));
-        const old_color = self.readColor(index);
-
-        if (new_color.eql(Color.off) and old_color.eql(Color.on))
-            result = true;
-    }
-
-    return result;
+    return if (old_color.eql(Color.on))
+        true
+    else
+        false;
 }
 
 pub fn clear(self: *@This()) void {
