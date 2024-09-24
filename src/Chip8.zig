@@ -3,25 +3,36 @@ const c = @import("c.zig");
 const Sdl = @import("Sdl.zig");
 const Frame = @import("Frame.zig");
 
+const ColorOn = 0xFF1CA5FF;
+const ColorOff = 0xFF0055CC;
+
+pub const Pixel = u32;
+pub const PixelBuffer = [screen_width * screen_height]Pixel;
+
 pub const screen_width = 64;
 pub const screen_height = 32;
 
 const execution_frequency = 1.0 / 600.0;
 const timer_frequency = 1.0 / 60.0;
 const memory_size = 4096;
+const display_memory_size = screen_width * screen_height / 8;
 const stack_size = 16;
 const program_start_address = 512;
 
 regs: Registers,
 stack: Stack,
 memory: Memory,
-frame: Frame,
+display_memory: DisplayMemory,
 rng: std.Random.DefaultPrng,
 keyboard: Keyboard,
-wait_for_key: bool,
+waiting_for_key: packed struct {
+    register: u7,
+    waiting: bool,
+},
 
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
+const DisplayMemory = [display_memory_size]u8;
 const Opcode = u16;
 const Keyboard = [Key.count]bool;
 
@@ -54,13 +65,15 @@ pub fn init(rom: []const u8) !@This() {
         .regs = .init,
         .stack = std.mem.zeroes(Stack),
         .memory = std.mem.zeroes(Memory),
-        .frame = .init,
+        .display_memory = std.mem.zeroes(DisplayMemory),
         .rng = std.Random.DefaultPrng.init(0),
         .keyboard = std.mem.zeroes(Keyboard),
-        .wait_for_key = false,
+        .waiting_for_key = .{
+            .register = 0,
+            .waiting = false,
+        },
     };
 
-    self.frame.clear();
     @memcpy(self.memory[0..default_character_set.len], &default_character_set);
     @memcpy(self.memory[program_start_address .. program_start_address + rom.len], rom);
 
@@ -73,65 +86,46 @@ pub fn run(self: *@This(), sdl: *Sdl) !void {
     var execution_timer = try std.time.Timer.start();
     var execute_count: u32 = 0;
 
-    loop: while (true) {
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event) != 0) {
-            switch (event.type) {
-                c.SDL_QUIT => break :loop,
-                c.SDL_KEYDOWN, c.SDL_KEYUP => {
-                    const maybe_key = Key.fromSdlKey(event.key.keysym.sym);
-                    if (maybe_key) |key| {
-                        const is_key_down = event.key.type == c.SDL_KEYDOWN;
-                        self.keyboard[@intFromEnum(key)] = is_key_down;
-
-                        if (is_key_down) self.wait_for_key = false;
-                    }
-                },
-                else => {},
+    var render_frame = false;
+    if (execute_count > 0 and !self.waiting_for_key) {
+        while (execute_count > 0) {
+            const opcode = self.readNextOpcode();
+            if (self.execute(opcode) and !render_frame) {
+                render_frame = true;
             }
+
+            execute_count -= 1;
+
+            if (self.waiting_for_key) break;
         }
-
-        var render_frame = false;
-        if (execute_count > 0 and !self.wait_for_key) {
-            while (execute_count > 0) {
-                const opcode = self.readNextOpcode();
-                if (self.execute(opcode) and !render_frame) {
-                    render_frame = true;
-                }
-
-                execute_count -= 1;
-
-                if (self.wait_for_key) break;
-            }
-        }
-
-        const time_elapsed_timer = timeElapsedSecs(timer.read());
-        if (time_elapsed_timer > timer_frequency) {
-            const ticks: u8 = @intFromFloat(time_elapsed_timer / timer_frequency);
-            self.regs.dt -|= ticks;
-            self.regs.st -|= ticks;
-            timer.reset();
-        }
-
-        const audio_was_playing = audio_is_playing;
-        audio_is_playing = self.regs.st > 0;
-        if (audio_is_playing != audio_was_playing) {
-            c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_is_playing));
-        }
-
-        const time_elapsed_execution = timeElapsedSecs(execution_timer.read());
-        if (time_elapsed_execution > execution_frequency) {
-            const ticks: u32 = @intFromFloat(time_elapsed_execution / execution_frequency);
-            execute_count += ticks;
-            execution_timer.reset();
-        }
-
-        if (render_frame) {
-            try sdl.presentFrame(&self.frame);
-        }
-
-        c.SDL_Delay(4);
     }
+
+    const time_elapsed_timer = timeElapsedSecs(timer.read());
+    if (time_elapsed_timer > timer_frequency) {
+        const ticks: u8 = @intFromFloat(time_elapsed_timer / timer_frequency);
+        self.regs.dt -|= ticks;
+        self.regs.st -|= ticks;
+        timer.reset();
+    }
+
+    const audio_was_playing = audio_is_playing;
+    audio_is_playing = self.regs.st > 0;
+    if (audio_is_playing != audio_was_playing) {
+        c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_is_playing));
+    }
+
+    const time_elapsed_execution = timeElapsedSecs(execution_timer.read());
+    if (time_elapsed_execution > execution_frequency) {
+        const ticks: u32 = @intFromFloat(time_elapsed_execution / execution_frequency);
+        execute_count += ticks;
+        execution_timer.reset();
+    }
+
+    if (render_frame) {
+        try sdl.presentFrame(&self.frame);
+    }
+
+    c.SDL_Delay(4);
 }
 
 fn timeElapsedSecs(time_elapsed_ns: u64) f64 {
@@ -139,19 +133,32 @@ fn timeElapsedSecs(time_elapsed_ns: u64) f64 {
     return time_elapsed_ns_f64 / std.time.ns_per_s;
 }
 
-fn execute(self: *@This(), opcode: Opcode) bool {
-    var result = false;
+pub fn renderToBuffer(self: *const @This(), pixels: []Pixel) void {
+    for (0..pixels.len) |index| {
+        const bit: u3 = @intCast(index % 8);
+        const byte = index / 8;
+        const mask = @as(u8, 1) << (7 - bit);
+
+        if (self.display_memory[byte] & mask != 0) {
+            pixels[index] = ColorOn;
+        } else {
+            pixels[index] = ColorOff;
+        }
+    }
+}
+
+pub fn executeIns(self: *@This()) void {
+    const opcode = self.readNextOpcode();
 
     const v = &self.regs.v;
-
     const nnn = opcode & 0xFFF;
     const n = opcode & 0xF;
-    const x = (opcode >> 8) & 0xF;
-    const y = (opcode >> 4) & 0xF;
+    const x: u4 = @intCast((opcode >> 8) & 0xF);
+    const y: u4 = @intCast((opcode >> 4) & 0xF);
     const kk: u8 = @intCast(opcode & 0xFF);
 
     switch (opcode) {
-        0x00E0 => self.frame.clear(),
+        0x00E0 => @memset(&self.display_memory, 0),
         0x00EE => self.regs.pc = self.pop(),
         else => switch (opcode & 0xF000) {
             0x0000 => {},
@@ -219,26 +226,19 @@ fn execute(self: *@This(), opcode: Opcode) bool {
                 const address = self.regs.i;
                 const sprite = self.memory[address .. address + n];
 
-                var collision = false;
+                for (v[y]..v[y] + n, 0..) |row, index| {
+                    // Handles cases when x is not at a byte boundary.
+                    const sprite_row: u16 = sprite[index];
+                    const sprite_part1 = sprite_row >> @intCast(v[x] % 8);
+                    const sprite_part2 = sprite_row << @intCast(8 - (v[x] % 8));
 
-                for (sprite, 0..) |byte, sprite_y| {
-                    for (0..8) |sprite_x| {
-                        const mask: u8 = @as(u8, 0x80) >> @intCast(sprite_x);
-                        if (byte & mask == 0) continue;
+                    const row_offset = (row % screen_height) * screen_width;
+                    const disp_address1 = (v[x] % screen_width) + row_offset;
+                    const disp_address2 = ((v[x] + 7) % screen_width) + row_offset;
 
-                        const pixel_x = (v[x] + sprite_x) % screen_width;
-                        const pixel_y = (v[y] + sprite_y) % screen_height;
-
-                        if (self.frame.hasCollision(pixel_x, pixel_y))
-                            collision = true;
-
-                        self.frame.putPixel(pixel_x, pixel_y);
-                    }
+                    self.display_memory[disp_address1 / 8] ^= @truncate(sprite_part1);
+                    self.display_memory[disp_address2 / 8] ^= @truncate(sprite_part2);
                 }
-
-                self.regs.v[Registers.flags] = @intFromBool(collision);
-
-                result = true;
             },
             0xE000 => switch (opcode & 0xFF) {
                 0x9E => if (self.keyboard[v[x]]) {
@@ -251,7 +251,10 @@ fn execute(self: *@This(), opcode: Opcode) bool {
             },
             0xF000 => switch (opcode & 0xFF) {
                 0x07 => v[x] = self.regs.dt,
-                0x0A => self.wait_for_key = true,
+                0x0A => self.waiting_for_key = .{
+                    .register = x,
+                    .waiting = true,
+                },
                 0x15 => self.regs.dt = v[x],
                 0x18 => self.regs.st = v[x],
                 0x1E => self.regs.i +%= v[x],
@@ -278,18 +281,19 @@ fn execute(self: *@This(), opcode: Opcode) bool {
             else => invalidInstruction(opcode),
         },
     }
-
-    return result;
 }
 
 fn push(self: *@This(), value: u16) void {
-    self.stack[self.regs.sp] = value;
     self.regs.sp +%= 1;
+    self.regs.sp %= stack_size;
+    self.stack[self.regs.sp] = value;
 }
 
 fn pop(self: *@This()) u16 {
+    const value = self.stack[self.regs.sp];
     self.regs.sp -%= 1;
-    return self.stack[self.regs.sp];
+    self.regs.sp %= stack_size;
+    return value;
 }
 
 fn readNextOpcode(self: *@This()) Opcode {
@@ -325,7 +329,7 @@ const default_character_set = [_]u8{
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 };
 
-const Key = enum {
+pub const Key = enum {
     const count = std.enums.values(Key).len;
 
     @"0",
@@ -344,26 +348,4 @@ const Key = enum {
     d,
     e,
     f,
-
-    fn fromSdlKey(key: i32) ?Key {
-        return switch (key) {
-            c.SDLK_0 => .@"0",
-            c.SDLK_1 => .@"1",
-            c.SDLK_2 => .@"2",
-            c.SDLK_3 => .@"3",
-            c.SDLK_4 => .@"4",
-            c.SDLK_5 => .@"5",
-            c.SDLK_6 => .@"6",
-            c.SDLK_7 => .@"7",
-            c.SDLK_8 => .@"8",
-            c.SDLK_9 => .@"9",
-            c.SDLK_a => .a,
-            c.SDLK_b => .b,
-            c.SDLK_c => .c,
-            c.SDLK_d => .d,
-            c.SDLK_e => .e,
-            c.SDLK_f => .f,
-            else => return null,
-        };
-    }
 };

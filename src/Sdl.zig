@@ -1,7 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig");
 const Chip8 = @import("Chip8.zig");
-const Frame = @import("Frame.zig");
 
 window: *c.SDL_Window,
 renderer: *c.SDL_Renderer,
@@ -40,9 +39,6 @@ pub fn init(
         return error.SdlRendererCreationFailed;
     errdefer c.SDL_DestroyRenderer(renderer);
 
-    if (c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, c.SDL_ALPHA_OPAQUE) < 0)
-        return error.SdlRenderClearFailed;
-
     const texture = c.SDL_CreateTexture(
         renderer,
         c.SDL_PIXELFORMAT_RGBA32,
@@ -51,6 +47,9 @@ pub fn init(
         Chip8.screen_height,
     ) orelse return error.SdlTextureCreationFailed;
     errdefer c.SDL_DestroyTexture(texture);
+
+    if (c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, c.SDL_ALPHA_OPAQUE) < 0)
+        return error.SdlRenderClearFailed;
 
     const audio_context = try std.heap.page_allocator.create(AudioContext);
 
@@ -94,7 +93,7 @@ pub fn init(
     };
 }
 
-pub fn presentFrame(self: *@This(), frame: *const Frame) !void {
+pub fn presentFrame(self: *@This(), pixels: []const Chip8.Pixel) !void {
     errdefer printSdlError();
 
     if (c.SDL_RenderClear(self.renderer) < 0)
@@ -103,15 +102,13 @@ pub fn presentFrame(self: *@This(), frame: *const Frame) !void {
     {
         var pixel_ptr: ?*anyopaque = undefined;
         var pitch: c_int = undefined;
+
         if (c.SDL_LockTexture(self.texture, null, &pixel_ptr, &pitch) < 0)
             return error.SdlTextureLockFailed;
         defer c.SDL_UnlockTexture(self.texture);
 
-        std.debug.assert(pitch == Frame.pitch);
-
         const ptr: [*]u8 = @ptrCast(pixel_ptr);
-        const pixels = ptr[0..Frame.size];
-        @memcpy(pixels, &frame.pixels);
+        @memcpy(ptr, std.mem.sliceAsBytes(pixels));
     }
 
     if (c.SDL_RenderCopy(self.renderer, self.texture, null, null) < 0)
