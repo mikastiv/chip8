@@ -30,7 +30,6 @@ waiting_for_key: packed struct {
     register: u8,
     waiting: bool,
 },
-new_frame: bool,
 
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
@@ -74,7 +73,6 @@ pub fn init(rom: []const u8) !@This() {
             .register = 0,
             .waiting = false,
         },
-        .new_frame = false,
     };
 
     @memcpy(self.memory[font_address .. font_address + font.len], &font);
@@ -176,21 +174,26 @@ pub fn executeIns(self: *@This()) void {
                 const address = self.regs.i;
                 const sprite = self.memory[address .. address + n];
 
+                var collision: u8 = 0;
+
                 for (v[y]..v[y] + n, 0..) |row, index| {
                     // Handles cases when x is not at a byte boundary.
                     const sprite_row: u16 = sprite[index];
-                    const sprite_part1 = sprite_row >> @intCast(v[x] % 8);
-                    const sprite_part2 = sprite_row << @intCast(8 - (v[x] % 8));
+                    const sprite_part1: u8 = @truncate(sprite_row >> @intCast(v[x] % 8));
+                    const sprite_part2: u8 = @truncate(sprite_row << @intCast(8 - (v[x] % 8)));
 
                     const row_offset = (row % screen_height) * screen_width;
                     const disp_address1 = (v[x] % screen_width) + row_offset;
                     const disp_address2 = ((v[x] + 7) % screen_width) + row_offset;
 
-                    self.display_memory[disp_address1 / 8] ^= @truncate(sprite_part1);
-                    self.display_memory[disp_address2 / 8] ^= @truncate(sprite_part2);
+                    self.display_memory[disp_address1 / 8] ^= sprite_part1;
+                    self.display_memory[disp_address2 / 8] ^= sprite_part2;
+
+                    collision |= (self.display_memory[disp_address1 / 8] ^ sprite_part1) & sprite_part1;
+                    collision |= (self.display_memory[disp_address2 / 8] ^ sprite_part2) & sprite_part2;
                 }
 
-                self.new_frame = true;
+                v[Registers.flags] = @intFromBool(collision != 0);
             },
             0xE000 => switch (opcode & 0xFF) {
                 0x9E => if (self.keyboard[v[x]]) {
