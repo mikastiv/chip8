@@ -10,15 +10,21 @@ const usage =
 
 const max_rom_size = std.math.maxInt(u16);
 
-pub const window_width = 800;
-pub const window_height = 600;
-pub const sample_rate = 48000;
-pub const note_hz = 256.0;
+const window_width = 800;
+const window_height = 600;
+const sample_rate = 48000;
+const note_hz = 256.0;
+const volume = 0.10;
+const fps = 60.0; // This should always be 60
+const instructions_per_sec = 600;
 
 const Keymap = std.AutoArrayHashMap(i32, Chip8.Key);
 
 pub fn main() !void {
-    const args = try std.process.argsAlloc(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
 
     const stderr = std.io.getStdErr();
     if (args.len < 2) {
@@ -29,10 +35,10 @@ pub fn main() !void {
     const rom = try readRomFile(args[1]);
     var chip8 = try Chip8.init(rom);
 
-    var sdl = try Sdl.init("chip-8", window_width, window_height, sample_rate, note_hz);
+    var sdl = try Sdl.init(allocator, "chip-8", window_width, window_height, sample_rate, note_hz, volume);
     defer sdl.deinit();
 
-    const keymap = try generateKeymap(std.heap.page_allocator, .{
+    const keymap = try generateKeymap(allocator, .{
         .{ c.SDLK_0, Chip8.Key.@"0" },
         .{ c.SDLK_1, Chip8.Key.@"1" },
         .{ c.SDLK_2, Chip8.Key.@"2" },
@@ -50,9 +56,6 @@ pub fn main() !void {
         .{ c.SDLK_e, Chip8.Key.e },
         .{ c.SDLK_f, Chip8.Key.f },
     });
-
-    const fps = 60.0;
-    const instructions_per_sec = 600;
 
     const sec_per_frame = 1.0 / fps;
     const ms_per_frame = sec_per_frame * std.time.ms_per_s;

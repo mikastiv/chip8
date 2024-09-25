@@ -13,11 +13,13 @@ fn printSdlError() void {
 }
 
 pub fn init(
+    allocator: std.mem.Allocator,
     window_title: [:0]const u8,
     window_width: u32,
     window_height: u32,
     sample_rate: u32,
     note_hz: f32,
+    volume: f32,
 ) !@This() {
     errdefer printSdlError();
 
@@ -51,7 +53,7 @@ pub fn init(
     if (c.SDL_SetRenderDrawColor(renderer, 0, 0, 0, c.SDL_ALPHA_OPAQUE) < 0)
         return error.SdlRenderClearFailed;
 
-    const audio_context = try std.heap.page_allocator.create(AudioContext);
+    const audio_context = try allocator.create(AudioContext);
 
     const wanted_audio_spec: c.SDL_AudioSpec = .{
         .freq = @intCast(sample_rate),
@@ -79,6 +81,7 @@ pub fn init(
         defer c.SDL_UnlockAudioDevice(audio_device);
 
         audio_context.* = .{
+            .volume = volume,
             .increment = note_hz / @as(f32, @floatFromInt(obtained_audio_spec.freq)),
             .phase = 0,
         };
@@ -118,8 +121,7 @@ pub fn presentFrame(self: *@This(), pixels: []const Chip8.Pixel) !void {
 }
 
 const AudioContext = struct {
-    const volume = 0.10;
-
+    volume: f32,
     increment: f32,
     phase: f32,
 };
@@ -129,7 +131,7 @@ fn audioCallback(ctx: ?*anyopaque, raw_stream: [*c]c.Uint8, size: c_int) callcon
 
     const stream = std.mem.bytesAsSlice(f32, raw_stream[0..@intCast(size)]);
     for (stream) |*sample| {
-        sample.* = if (audio.phase > 0.5) AudioContext.volume else -AudioContext.volume;
+        sample.* = if (audio.phase > 0.5) audio.volume else -audio.volume;
         audio.phase = @mod(audio.phase + audio.increment, 1.0);
     }
 }
