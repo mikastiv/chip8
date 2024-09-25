@@ -1,7 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig");
 const Sdl = @import("Sdl.zig");
-const Frame = @import("Frame.zig");
 
 const ColorOn = 0xFF1CA5FF;
 const ColorOff = 0xFF0055CC;
@@ -17,7 +16,9 @@ const timer_frequency = 1.0 / 60.0;
 const memory_size = 4096;
 const display_memory_size = screen_width * screen_height / 8;
 const stack_size = 16;
-const program_start_address = 512;
+
+const program_address = 0x200;
+const font_address = 0x50;
 
 regs: Registers,
 stack: Stack,
@@ -26,9 +27,10 @@ display_memory: DisplayMemory,
 rng: std.Random.DefaultPrng,
 keyboard: Keyboard,
 waiting_for_key: packed struct {
-    register: u7,
+    register: u8,
     waiting: bool,
 },
+new_frame: bool,
 
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
@@ -53,12 +55,12 @@ const Registers = struct {
         .dt = 0,
         .st = 0,
         .sp = 0,
-        .pc = program_start_address,
+        .pc = program_address,
     };
 };
 
 pub fn init(rom: []const u8) !@This() {
-    if (rom.len > memory_size - program_start_address)
+    if (rom.len > memory_size - program_address)
         return error.ProgramTooLarge;
 
     var self: @This() = .{
@@ -72,65 +74,13 @@ pub fn init(rom: []const u8) !@This() {
             .register = 0,
             .waiting = false,
         },
+        .new_frame = false,
     };
 
-    @memcpy(self.memory[0..default_character_set.len], &default_character_set);
-    @memcpy(self.memory[program_start_address .. program_start_address + rom.len], rom);
+    @memcpy(self.memory[font_address .. font_address + font.len], &font);
+    @memcpy(self.memory[program_address .. program_address + rom.len], rom);
 
     return self;
-}
-
-pub fn run(self: *@This(), sdl: *Sdl) !void {
-    var audio_is_playing = false;
-    var timer = try std.time.Timer.start();
-    var execution_timer = try std.time.Timer.start();
-    var execute_count: u32 = 0;
-
-    var render_frame = false;
-    if (execute_count > 0 and !self.waiting_for_key) {
-        while (execute_count > 0) {
-            const opcode = self.readNextOpcode();
-            if (self.execute(opcode) and !render_frame) {
-                render_frame = true;
-            }
-
-            execute_count -= 1;
-
-            if (self.waiting_for_key) break;
-        }
-    }
-
-    const time_elapsed_timer = timeElapsedSecs(timer.read());
-    if (time_elapsed_timer > timer_frequency) {
-        const ticks: u8 = @intFromFloat(time_elapsed_timer / timer_frequency);
-        self.regs.dt -|= ticks;
-        self.regs.st -|= ticks;
-        timer.reset();
-    }
-
-    const audio_was_playing = audio_is_playing;
-    audio_is_playing = self.regs.st > 0;
-    if (audio_is_playing != audio_was_playing) {
-        c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_is_playing));
-    }
-
-    const time_elapsed_execution = timeElapsedSecs(execution_timer.read());
-    if (time_elapsed_execution > execution_frequency) {
-        const ticks: u32 = @intFromFloat(time_elapsed_execution / execution_frequency);
-        execute_count += ticks;
-        execution_timer.reset();
-    }
-
-    if (render_frame) {
-        try sdl.presentFrame(&self.frame);
-    }
-
-    c.SDL_Delay(4);
-}
-
-fn timeElapsedSecs(time_elapsed_ns: u64) f64 {
-    const time_elapsed_ns_f64: f64 = @floatFromInt(time_elapsed_ns);
-    return time_elapsed_ns_f64 / std.time.ns_per_s;
 }
 
 pub fn renderToBuffer(self: *const @This(), pixels: []Pixel) void {
@@ -153,8 +103,8 @@ pub fn executeIns(self: *@This()) void {
     const v = &self.regs.v;
     const nnn = opcode & 0xFFF;
     const n = opcode & 0xF;
-    const x: u4 = @intCast((opcode >> 8) & 0xF);
-    const y: u4 = @intCast((opcode >> 4) & 0xF);
+    const x: u8 = @intCast((opcode >> 8) & 0xF);
+    const y: u8 = @intCast((opcode >> 4) & 0xF);
     const kk: u8 = @intCast(opcode & 0xFF);
 
     switch (opcode) {
@@ -239,6 +189,8 @@ pub fn executeIns(self: *@This()) void {
                     self.display_memory[disp_address1 / 8] ^= @truncate(sprite_part1);
                     self.display_memory[disp_address2 / 8] ^= @truncate(sprite_part2);
                 }
+
+                self.new_frame = true;
             },
             0xE000 => switch (opcode & 0xFF) {
                 0x9E => if (self.keyboard[v[x]]) {
@@ -310,7 +262,7 @@ fn invalidInstruction(opcode: Opcode) void {
 }
 
 const character_size = 5;
-const default_character_set = [_]u8{
+const font = [_]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
     0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2

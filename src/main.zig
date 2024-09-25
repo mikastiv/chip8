@@ -27,7 +27,6 @@ pub fn main() !void {
     }
 
     const rom = try readRomFile(args[1]);
-
     var chip8 = try Chip8.init(rom);
 
     var sdl = try Sdl.init("chip-8", window_width, window_height, sample_rate, note_hz);
@@ -52,34 +51,95 @@ pub fn main() !void {
         .{ c.SDLK_f, Chip8.Key.f },
     });
 
-    loop: while (true) {
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event) != 0) {
-            switch (event.type) {
-                c.SDL_QUIT => break :loop,
-                c.SDL_KEYDOWN, c.SDL_KEYUP => {
-                    const maybe_key = keymap.get(event.key.keysym.sym);
-                    if (maybe_key) |key| {
-                        const is_key_down = event.key.type == c.SDL_KEYDOWN;
-                        chip8.keyboard[@intFromEnum(key)] = is_key_down;
+    const fps = 60.0;
+    const instructions_per_sec = 600;
 
-                        if (is_key_down and chip8.waiting_for_key.waiting) {
-                            chip8.waiting_for_key.waiting = false;
-                            chip8.regs.v[chip8.waiting_for_key.register] = @intFromEnum(key);
-                        }
-                    }
-                },
-                else => {},
-            }
+    const sec_per_frame = 1.0 / fps;
+    const ms_per_frame = sec_per_frame * std.time.ms_per_s;
+    const ns_per_frame = ms_per_frame * std.time.ns_per_ms;
+    const instructions_per_frame = sec_per_frame * instructions_per_sec;
+
+    var audio_state = false;
+
+    var instruction_count: u32 = 0;
+    var frames_to_render: u32 = 0;
+
+    var timer_accumulator: u64 = 0;
+    var last_instant = try std.time.Instant.now();
+
+    while (true) {
+        var quit = false;
+        pollEvents(&chip8, &keymap, &quit);
+        if (quit) break;
+
+        while (instruction_count > 0 and !chip8.waiting_for_key.waiting) : (instruction_count -= 1) {
+            chip8.executeIns();
         }
 
-        if (!chip8.waiting_for_key.waiting)
-            chip8.executeIns();
+        const now = try std.time.Instant.now();
+        const duration = now.since(last_instant);
+        timer_accumulator += duration;
+        last_instant = now;
 
-        var pixels: Chip8.PixelBuffer = undefined;
-        chip8.renderToBuffer(&pixels);
+        const ns: u64 = @intFromFloat(ns_per_frame);
+        while (timer_accumulator > ns) {
+            timer_accumulator -= ns;
+            frames_to_render += 1;
+        }
 
-        try sdl.presentFrame(&pixels);
+        if (frames_to_render > 0) {
+            // Timers tick once per frame (60 Hz)
+            chip8.regs.dt -|= 1;
+            chip8.regs.st -|= 1;
+
+            const chip8_audio = chip8.regs.st == 0;
+            if (audio_state != chip8_audio) {
+                c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(chip8_audio));
+            }
+
+            audio_state = chip8_audio;
+
+            var pixels: Chip8.PixelBuffer = undefined;
+            chip8.renderToBuffer(&pixels);
+            try sdl.presentFrame(&pixels);
+
+            instruction_count += @intFromFloat(instructions_per_frame);
+            frames_to_render -= 1;
+        }
+
+        if (chip8.waiting_for_key.waiting or frames_to_render == 0)
+            c.SDL_Delay(@intFromFloat(ms_per_frame));
+    }
+}
+
+fn pollEvents(chip8: *Chip8, keymap: *const Keymap, quit: *bool) void {
+    quit.* = false;
+
+    var event: c.SDL_Event = undefined;
+    while (c.SDL_PollEvent(&event) != 0) {
+        switch (event.type) {
+            c.SDL_QUIT => quit.* = true,
+            c.SDL_KEYDOWN, c.SDL_KEYUP => {
+                const maybe_key = keymap.get(event.key.keysym.sym);
+                if (maybe_key) |key| {
+                    const key_value: u8 = @intFromEnum(key);
+                    const is_key_down = event.key.type == c.SDL_KEYDOWN;
+                    chip8.keyboard[key_value] = is_key_down;
+
+                    if (chip8.waiting_for_key.waiting) {
+                        if (is_key_down) {
+                            chip8.regs.v[chip8.waiting_for_key.register] = key_value;
+                        }
+
+                        // wait for release
+                        if (!is_key_down and chip8.regs.v[chip8.waiting_for_key.register] == key_value) {
+                            chip8.waiting_for_key.waiting = false;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
     }
 }
 
