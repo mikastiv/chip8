@@ -26,7 +26,7 @@ memory: Memory,
 display_memory: DisplayMemory,
 rng: std.Random.DefaultPrng,
 keyboard: Keyboard,
-waiting_for_key: packed struct {
+key_event: packed struct {
     register: u8,
     waiting: bool,
 },
@@ -69,7 +69,7 @@ pub fn init(rom: []const u8) !@This() {
         .display_memory = std.mem.zeroes(DisplayMemory),
         .rng = std.Random.DefaultPrng.init(0),
         .keyboard = std.mem.zeroes(Keyboard),
-        .waiting_for_key = .{
+        .key_event = .{
             .register = 0,
             .waiting = false,
         },
@@ -206,7 +206,7 @@ pub fn executeIns(self: *@This()) void {
             },
             0xF000 => switch (opcode & 0xFF) {
                 0x07 => v[x] = self.regs.dt,
-                0x0A => self.waiting_for_key = .{
+                0x0A => self.key_event = .{
                     .register = x,
                     .waiting = true,
                 },
