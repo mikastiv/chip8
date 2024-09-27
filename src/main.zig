@@ -72,10 +72,10 @@ pub fn main() !void {
 
         if (frames_to_render > 0) {
             // Timers tick once per frame (60 Hz)
-            chip8.regs.dt -|= 1;
-            chip8.regs.st -|= 1;
+            chip8.dt -|= 1;
+            chip8.st -|= 1;
 
-            const audio_on = chip8.regs.st != 0;
+            const audio_on = chip8.st != 0;
             if (audio_state != audio_on) {
                 c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_on));
             }
@@ -111,11 +111,11 @@ fn pollEvents(chip8: *Chip8, quit: *bool) void {
 
                     if (chip8.key_event.waiting) {
                         if (is_key_down) {
-                            chip8.regs.v[chip8.key_event.register] = key_value;
+                            chip8.regs[chip8.key_event.register] = key_value;
                         }
 
                         // wait for release
-                        if (!is_key_down and chip8.regs.v[chip8.key_event.register] == key_value) {
+                        if (!is_key_down and chip8.regs[chip8.key_event.register] == key_value) {
                             chip8.key_event.waiting = false;
                         }
                     }

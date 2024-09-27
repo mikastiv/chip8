@@ -2,8 +2,8 @@ const std = @import("std");
 const c = @import("c.zig");
 const Sdl = @import("Sdl.zig");
 
-const ColorOn = 0xFF1CA5FF;
-const ColorOff = 0xFF0055CC;
+const color_on = 0xFF1CA5FF;
+const color_off = 0xFF0055CC;
 
 pub const Pixel = u32;
 pub const PixelBuffer = [screen_width * screen_height]Pixel;
@@ -16,11 +16,18 @@ const timer_frequency = 1.0 / 60.0;
 const memory_size = 4096;
 const display_memory_size = screen_width * screen_height / 8;
 const stack_size = 16;
+const register_count = 16;
 
 const program_address = 0x200;
 const font_address = 0x50;
+const flags = 0xF;
 
 regs: Registers,
+i: u16,
+pc: u16,
+dt: u8,
+st: u8,
+sp: u8,
 stack: Stack,
 memory: Memory,
 display_memory: DisplayMemory,
@@ -31,49 +38,20 @@ key_event: packed struct {
     waiting: bool,
 },
 
+const Registers = [register_count]u8;
 const Stack = [stack_size]u16;
 const Memory = [memory_size]u8;
 const DisplayMemory = [display_memory_size]u8;
 const Opcode = u16;
 const Keyboard = [Key.count]bool;
 
-const Registers = struct {
-    const count = 16;
-    const flags = 0xF;
-
-    v: [count]u8,
-    i: u16,
-    dt: u8,
-    st: u8,
-    sp: u8,
-    pc: u16,
-
-    const init: Registers = .{
-        .v = std.mem.zeroes([count]u8),
-        .i = 0,
-        .dt = 0,
-        .st = 0,
-        .sp = 0,
-        .pc = program_address,
-    };
-};
-
 pub fn init(rom: []const u8) !@This() {
     if (rom.len > memory_size - program_address)
         return error.ProgramTooLarge;
 
-    var self: @This() = .{
-        .regs = .init,
-        .stack = std.mem.zeroes(Stack),
-        .memory = std.mem.zeroes(Memory),
-        .display_memory = std.mem.zeroes(DisplayMemory),
-        .rng = std.Random.DefaultPrng.init(0),
-        .keyboard = std.mem.zeroes(Keyboard),
-        .key_event = .{
-            .register = 0,
-            .waiting = false,
-        },
-    };
+    var self = std.mem.zeroes(@This());
+    self.pc = program_address;
+    self.rng = std.Random.DefaultPrng.init(0);
 
     @memcpy(self.memory[font_address .. font_address + font.len], &font);
     @memcpy(self.memory[program_address .. program_address + rom.len], rom);
@@ -88,9 +66,9 @@ pub fn renderToBuffer(self: *const @This(), pixels: []Pixel) void {
         const mask = @as(u8, 1) << (7 - bit);
 
         if (self.display_memory[byte] & mask != 0) {
-            pixels[index] = ColorOn;
+            pixels[index] = color_on;
         } else {
-            pixels[index] = ColorOff;
+            pixels[index] = color_off;
         }
     }
 }
@@ -98,7 +76,7 @@ pub fn renderToBuffer(self: *const @This(), pixels: []Pixel) void {
 pub fn executeIns(self: *@This()) void {
     const opcode = self.readNextOpcode();
 
-    const v = &self.regs.v;
+    const v = &self.regs;
     const nnn = opcode & 0xFFF;
     const n = opcode & 0xF;
     const x: u8 = @intCast((opcode >> 8) & 0xF);
@@ -107,23 +85,23 @@ pub fn executeIns(self: *@This()) void {
 
     switch (opcode) {
         0x00E0 => @memset(&self.display_memory, 0),
-        0x00EE => self.regs.pc = self.pop(),
+        0x00EE => self.pc = self.pop(),
         else => switch (opcode & 0xF000) {
             0x0000 => {},
-            0x1000 => self.regs.pc = nnn,
+            0x1000 => self.pc = nnn,
             0x2000 => {
-                self.push(self.regs.pc);
-                self.regs.pc = nnn;
+                self.push(self.pc);
+                self.pc = nnn;
             },
             0x3000 => if (v[x] == kk) {
-                self.regs.pc +%= 2;
+                self.pc +%= 2;
             },
             0x4000 => if (v[x] != kk) {
-                self.regs.pc +%= 2;
+                self.pc +%= 2;
             },
             0x5000 => switch (opcode & 0xF) {
                 0x0 => if (v[x] == v[y]) {
-                    self.regs.pc +%= 2;
+                    self.pc +%= 2;
                 },
                 else => invalidInstruction(opcode),
             },
@@ -137,41 +115,41 @@ pub fn executeIns(self: *@This()) void {
                 0x4 => {
                     const sum = @as(u16, v[x]) + @as(u16, v[y]);
                     v[x] = @truncate(sum);
-                    v[Registers.flags] = @intFromBool(sum > 0xFF);
+                    v[flags] = @intFromBool(sum > 0xFF);
                 },
                 0x5 => {
                     const flag = v[x] >= v[y];
                     v[x] -%= v[y];
-                    v[Registers.flags] = @intFromBool(flag);
+                    v[flags] = @intFromBool(flag);
                 },
                 0x6 => {
                     const flag = v[x] & 0x1 != 0;
                     v[x] >>= 1;
-                    v[Registers.flags] = @intFromBool(flag);
+                    v[flags] = @intFromBool(flag);
                 },
                 0x7 => {
                     const flag = v[y] >= v[x];
                     v[x] = v[y] -% v[x];
-                    v[Registers.flags] = @intFromBool(flag);
+                    v[flags] = @intFromBool(flag);
                 },
                 0xE => {
                     const flag = v[x] & 0x8 != 0;
                     v[x] <<= 1;
-                    v[Registers.flags] = @intFromBool(flag);
+                    v[flags] = @intFromBool(flag);
                 },
                 else => invalidInstruction(opcode),
             },
             0x9000 => switch (opcode & 0xF) {
                 0x0 => if (v[x] != v[y]) {
-                    self.regs.pc +%= 2;
+                    self.pc +%= 2;
                 },
                 else => invalidInstruction(opcode),
             },
-            0xA000 => self.regs.i = nnn,
-            0xB000 => self.regs.pc = nnn +% v[x],
+            0xA000 => self.i = nnn,
+            0xB000 => self.pc = nnn +% v[x],
             0xC000 => v[x] = self.rng.random().int(u8) & kk,
             0xD000 => {
-                const address = self.regs.i;
+                const address = self.i;
                 const sprite = self.memory[address .. address + n];
 
                 var collision: u8 = 0;
@@ -193,43 +171,43 @@ pub fn executeIns(self: *@This()) void {
                     collision |= (self.display_memory[disp_address2 / 8] ^ sprite_part2) & sprite_part2;
                 }
 
-                v[Registers.flags] = @intFromBool(collision != 0);
+                v[flags] = @intFromBool(collision != 0);
             },
             0xE000 => switch (opcode & 0xFF) {
                 0x9E => if (self.keyboard[v[x]]) {
-                    self.regs.pc +%= 2;
+                    self.pc +%= 2;
                 },
                 0xA1 => if (!self.keyboard[v[x]]) {
-                    self.regs.pc +%= 2;
+                    self.pc +%= 2;
                 },
                 else => invalidInstruction(opcode),
             },
             0xF000 => switch (opcode & 0xFF) {
-                0x07 => v[x] = self.regs.dt,
+                0x07 => v[x] = self.dt,
                 0x0A => self.key_event = .{
                     .register = x,
                     .waiting = true,
                 },
-                0x15 => self.regs.dt = v[x],
-                0x18 => self.regs.st = v[x],
-                0x1E => self.regs.i +%= v[x],
-                0x29 => self.regs.i = character_size *% v[x],
+                0x15 => self.dt = v[x],
+                0x18 => self.st = v[x],
+                0x1E => self.i +%= v[x],
+                0x29 => self.i = character_size *% v[x],
                 0x33 => {
                     const units = v[x] % 10;
                     const tens = (v[x] / 10) % 10;
                     const hundreds = v[x] / 100;
 
-                    self.memory[self.regs.i + 0] = hundreds;
-                    self.memory[self.regs.i + 1] = tens;
-                    self.memory[self.regs.i + 2] = units;
+                    self.memory[self.i + 0] = hundreds;
+                    self.memory[self.i + 1] = tens;
+                    self.memory[self.i + 2] = units;
                 },
                 0x55 => for (0..x + 1) |index| {
-                    const address = self.regs.i + index;
-                    self.memory[address] = self.regs.v[index];
+                    const address = self.i + index;
+                    self.memory[address] = self.regs[index];
                 },
                 0x65 => for (0..x + 1) |index| {
-                    const address = self.regs.i + index;
-                    self.regs.v[index] = self.memory[address];
+                    const address = self.i + index;
+                    self.regs[index] = self.memory[address];
                 },
                 else => invalidInstruction(opcode),
             },
@@ -239,23 +217,23 @@ pub fn executeIns(self: *@This()) void {
 }
 
 fn push(self: *@This(), value: u16) void {
-    self.regs.sp +%= 1;
-    self.regs.sp %= stack_size;
-    self.stack[self.regs.sp] = value;
+    self.sp +%= 1;
+    self.sp %= stack_size;
+    self.stack[self.sp] = value;
 }
 
 fn pop(self: *@This()) u16 {
-    const value = self.stack[self.regs.sp];
-    self.regs.sp -%= 1;
-    self.regs.sp %= stack_size;
+    const value = self.stack[self.sp];
+    self.sp -%= 1;
+    self.sp %= stack_size;
     return value;
 }
 
 fn readNextOpcode(self: *@This()) Opcode {
-    const pc = self.regs.pc;
+    const pc = self.pc;
     const bytes = self.memory[pc .. pc + @sizeOf(Opcode)];
     const opcode = std.mem.readInt(Opcode, @ptrCast(bytes), .big);
-    self.regs.pc +%= 2;
+    self.pc +%= 2;
 
     return opcode;
 }
