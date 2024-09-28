@@ -103,6 +103,11 @@ fn pollEvents(chip8: *Chip8, quit: *bool) void {
         switch (event.type) {
             c.SDL_QUIT => quit.* = true,
             c.SDL_KEYDOWN, c.SDL_KEYUP => {
+                if (event.key.keysym.sym == c.SDLK_ESCAPE) {
+                    quit.* = true;
+                    break;
+                }
+
                 const maybe_key = matchKey(event.key.keysym.sym);
                 if (maybe_key) |key| {
                     const key_value: u8 = @intFromEnum(key);

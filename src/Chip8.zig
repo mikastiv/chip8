@@ -84,10 +84,12 @@ pub fn executeIns(self: *@This()) void {
     const kk: u8 = @intCast(opcode & 0xFF);
 
     switch (opcode) {
-        0x00E0 => @memset(&self.display_memory, 0),
-        0x00EE => self.pc = self.pop(),
         else => switch (opcode & 0xF000) {
-            0x0000 => {},
+            0x0000 => switch (opcode & 0x00FF) {
+                0x00E0 => @memset(&self.display_memory, 0),
+                0x00EE => self.pc = self.pop(),
+                else => {},
+            },
             0x1000 => self.pc = nnn,
             0x2000 => {
                 self.push(self.pc);
@@ -133,7 +135,7 @@ pub fn executeIns(self: *@This()) void {
                     v[flags] = @intFromBool(flag);
                 },
                 0xE => {
-                    const flag = v[x] & 0x8 != 0;
+                    const flag = v[x] & 0x80 != 0;
                     v[x] <<= 1;
                     v[flags] = @intFromBool(flag);
                 },
@@ -164,11 +166,13 @@ pub fn executeIns(self: *@This()) void {
                     const disp_address1 = (v[x] % screen_width) + row_offset;
                     const disp_address2 = ((v[x] + 7) % screen_width) + row_offset;
 
+                    const old_part1 = self.display_memory[disp_address1 / 8];
+                    const old_part2 = self.display_memory[disp_address2 / 8];
                     self.display_memory[disp_address1 / 8] ^= sprite_part1;
                     self.display_memory[disp_address2 / 8] ^= sprite_part2;
 
-                    collision |= (self.display_memory[disp_address1 / 8] ^ sprite_part1) & sprite_part1;
-                    collision |= (self.display_memory[disp_address2 / 8] ^ sprite_part2) & sprite_part2;
+                    collision |= old_part1 & sprite_part1;
+                    collision |= old_part2 & sprite_part2;
                 }
 
                 v[flags] = @intFromBool(collision != 0);
