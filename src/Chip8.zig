@@ -168,6 +168,7 @@ pub fn executeIns(self: *@This()) void {
 
                     const old_part1 = self.display_memory[disp_address1 / 8];
                     const old_part2 = self.display_memory[disp_address2 / 8];
+
                     self.display_memory[disp_address1 / 8] ^= sprite_part1;
                     self.display_memory[disp_address2 / 8] ^= sprite_part2;
 

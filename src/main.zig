@@ -19,7 +19,7 @@ const fps = 60.0; // This should always be 60
 const instructions_per_sec = 600;
 const sec_per_frame = 1.0 / fps;
 const ms_per_frame = sec_per_frame * std.time.ms_per_s;
-const ns_per_frame = ms_per_frame * std.time.ns_per_ms;
+const ns_per_frame: u64 = @intFromFloat(ms_per_frame * std.time.ns_per_ms);
 const instructions_per_frame = sec_per_frame * instructions_per_sec;
 
 const Keymap = std.AutoArrayHashMap(i32, Chip8.Key);
@@ -44,8 +44,7 @@ pub fn main() !void {
 
     var audio_state = false;
 
-    var instruction_count: u32 = 0;
-    var frames_to_render: u32 = 0;
+    var instruction_count: u64 = 0;
 
     var timer_accumulator: u64 = 0;
     var last_instant = try std.time.Instant.now();
@@ -64,16 +63,14 @@ pub fn main() !void {
         timer_accumulator += duration;
         last_instant = now;
 
-        const ns: u64 = @intFromFloat(ns_per_frame);
-        while (timer_accumulator > ns) {
-            timer_accumulator -= ns;
-            frames_to_render += 1;
-        }
+        const new_frames = timer_accumulator / ns_per_frame;
 
-        if (frames_to_render > 0) {
+        if (new_frames > 0) {
+            timer_accumulator -= ns_per_frame * new_frames;
+
             // Timers tick once per frame (60 Hz)
-            chip8.dt -|= 1;
-            chip8.st -|= 1;
+            chip8.dt -|= @intCast(new_frames);
+            chip8.st -|= @intCast(new_frames);
 
             const audio_on = chip8.st != 0;
             if (audio_state != audio_on) {
@@ -85,12 +82,11 @@ pub fn main() !void {
             var pixels: Chip8.PixelBuffer = undefined;
             chip8.renderToBuffer(&pixels);
             try sdl.presentFrame(&pixels);
-
-            instruction_count += @intFromFloat(instructions_per_frame);
-            frames_to_render -= 1;
         }
 
-        if (chip8.key_event.waiting or frames_to_render == 0)
+        instruction_count = @as(u64, @intFromFloat(instructions_per_frame)) * @max(new_frames, 1);
+
+        if (chip8.key_event.waiting or new_frames == 0)
             c.SDL_Delay(@intFromFloat(ms_per_frame));
     }
 }
