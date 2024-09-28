@@ -72,12 +72,12 @@ pub fn main() !void {
             chip8.dt -|= @intCast(new_frames);
             chip8.st -|= @intCast(new_frames);
 
-            const audio_on = chip8.st != 0;
-            if (audio_state != audio_on) {
-                c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!audio_on));
+            const is_audio_on = chip8.st != 0;
+            if (audio_state != is_audio_on) {
+                c.SDL_PauseAudioDevice(sdl.audio_device, @intFromBool(!is_audio_on));
             }
 
-            audio_state = audio_on;
+            audio_state = is_audio_on;
 
             var pixels: Chip8.PixelBuffer = undefined;
             chip8.renderToBuffer(&pixels);
