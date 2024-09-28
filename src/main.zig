@@ -15,12 +15,11 @@ const window_height = 600;
 const sample_rate = 48000;
 const note_hz = 256.0;
 const volume = 0.10;
+const instructions_per_frame = 50000;
 const fps = 60.0; // This should always be 60
-const instructions_per_sec = 600;
 const sec_per_frame = 1.0 / fps;
 const ms_per_frame = sec_per_frame * std.time.ms_per_s;
 const ns_per_frame: u64 = @intFromFloat(ms_per_frame * std.time.ns_per_ms);
-const instructions_per_frame = sec_per_frame * instructions_per_sec;
 
 const Keymap = std.AutoArrayHashMap(i32, Chip8.Key);
 
