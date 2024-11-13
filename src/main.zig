@@ -98,6 +98,8 @@ fn pollEvents(chip8: *Chip8, quit: *bool) void {
         switch (event.type) {
             c.SDL_QUIT => quit.* = true,
             c.SDL_KEYDOWN, c.SDL_KEYUP => {
+                if (event.key.repeat != 0) continue;
+
                 if (event.key.keysym.sym == c.SDLK_ESCAPE) {
                     quit.* = true;
                     break;
